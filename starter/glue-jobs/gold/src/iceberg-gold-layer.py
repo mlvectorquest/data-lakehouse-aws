@@ -3,7 +3,7 @@ AWS Glue Job: Gold Layer
 Reads from Silver Iceberg tables (S3 Tables), writes aggregated business
 metrics to Gold Iceberg tables, also on S3 Tables (managed Iceberg).
 
-Your task: Complete the TODOs to build gold-layer aggregations.
+Builds two gold-layer aggregations:
   1. customer_analytics  — monthly customer/revenue/segment aggregates
   2. realtime_metrics    — hourly event/traffic/revenue aggregates
 
@@ -84,30 +84,52 @@ def create_gold_table(name, query):
 
 
 # ── 1. customer_analytics ────────────────────────────────────────────────────
-# TODO 4: Create gold.customer_analytics by aggregating silver.order_details.
-# Read from {S3T_CAT}.{DB_SILVER}.order_details
-# GROUP BY date_trunc('month', order_date) AS analysis_month
-# Aggregate:
-#   - total_customers, new_customers (order_sequence=1), returning_customers
-#   - total_orders, total_revenue, avg_order_value
-#   - Orders per segment: new_customer_orders, repeat_customer_orders, loyal_customer_orders, vip_customer_orders
-#   - Geographic: cities_served, states_served
-#   - Revenue by segment: new_customer_revenue, vip_customer_revenue, loyal_customer_revenue
-#   - avg_customer_lifetime_value
-#   - gold_processed_at: current_timestamp()
+create_gold_table("customer_analytics", f"""
+    SELECT
+        date_trunc('month', order_date) AS analysis_month,
+        COUNT(DISTINCT user_id) AS total_customers,
+        COUNT(DISTINCT CASE WHEN customer_order_sequence = 1 THEN user_id END) AS new_customers,
+        COUNT(DISTINCT CASE WHEN customer_order_sequence > 1 THEN user_id END) AS returning_customers,
+        COUNT(*) AS total_orders,
+        SUM(total_amount) AS total_revenue,
+        AVG(total_amount) AS avg_order_value,
+        COUNT(CASE WHEN customer_segment = 'New' THEN 1 END) AS new_customer_orders,
+        COUNT(CASE WHEN customer_segment = 'Repeat' THEN 1 END) AS repeat_customer_orders,
+        COUNT(CASE WHEN customer_segment = 'Loyal' THEN 1 END) AS loyal_customer_orders,
+        COUNT(CASE WHEN customer_segment = 'VIP' THEN 1 END) AS vip_customer_orders,
+        COUNT(DISTINCT city) AS cities_served,
+        COUNT(DISTINCT state) AS states_served,
+        SUM(CASE WHEN customer_segment = 'New' THEN total_amount END) AS new_customer_revenue,
+        SUM(CASE WHEN customer_segment = 'VIP' THEN total_amount END) AS vip_customer_revenue,
+        SUM(CASE WHEN customer_segment = 'Loyal' THEN total_amount END) AS loyal_customer_revenue,
+        AVG(customer_lifetime_value) AS avg_customer_lifetime_value,
+        current_timestamp() AS gold_processed_at
+    FROM {S3T_CAT}.{DB_SILVER}.order_details
+    GROUP BY date_trunc('month', order_date)
+""")
 
 # ── 2. realtime_metrics ──────────────────────────────────────────────────────
-# TODO 5: Create gold.realtime_metrics by aggregating silver.enriched_events.
-# Read from {S3T_CAT}.{DB_SILVER}.enriched_events
-# GROUP BY date_trunc('hour', event_timestamp) AS metric_hour
-# Aggregate:
-#   - Traffic: total_events, unique_users, unique_sessions
-#   - Event breakdown: page_views, add_to_carts, purchases, clicks
-#   - Revenue: hourly_revenue (sum revenue for purchases), avg_purchase_value
-#   - Traffic sources: google_traffic, facebook_traffic, direct_traffic
-#   - categories_viewed (distinct product_category)
-#   - gold_processed_at: current_timestamp()
-# Filter: WHERE event_date >= DATE '2024-01-01'
+create_gold_table("realtime_metrics", f"""
+    SELECT
+        date_trunc('hour', event_timestamp) AS metric_hour,
+        COUNT(*) AS total_events,
+        COUNT(DISTINCT user_id) AS unique_users,
+        COUNT(DISTINCT session_id) AS unique_sessions,
+        COUNT(CASE WHEN event_type = 'page_view' THEN 1 END) AS page_views,
+        COUNT(CASE WHEN event_type = 'add_to_cart' THEN 1 END) AS add_to_carts,
+        COUNT(CASE WHEN event_type = 'purchase' THEN 1 END) AS purchases,
+        COUNT(CASE WHEN event_type = 'click' THEN 1 END) AS clicks,
+        COALESCE(SUM(CASE WHEN event_type = 'purchase' THEN revenue END), 0) AS hourly_revenue,
+        AVG(CASE WHEN event_type = 'purchase' THEN revenue END) AS avg_purchase_value,
+        COUNT(CASE WHEN source = 'google' THEN 1 END) AS google_traffic,
+        COUNT(CASE WHEN source = 'facebook' THEN 1 END) AS facebook_traffic,
+        COUNT(CASE WHEN source = 'direct' THEN 1 END) AS direct_traffic,
+        COUNT(DISTINCT product_category) AS categories_viewed,
+        current_timestamp() AS gold_processed_at
+    FROM {S3T_CAT}.{DB_SILVER}.enriched_events
+    WHERE event_date >= DATE '2024-01-01'
+    GROUP BY date_trunc('hour', event_timestamp)
+""")
 
 logger.info("Gold layer complete — tables written to S3 Tables")
 job.commit()
