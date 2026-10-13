@@ -45,18 +45,13 @@ S3T_CAT = "s3tablescatalog"     # Single catalog handles both silver and gold
 sc = SparkContext()
 glueContext = GlueContext(sc)
 
-# TODO 1: Configure Spark with the S3 Tables catalog using SparkSession.builder.
-# Same pattern as the silver layer — register s3tablescatalog with GlueCatalog + glue.id.
-#
-# spark = SparkSession.builder \
-#     .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-#     .config(f"spark.sql.catalog.{S3T_CAT}", "org.apache.iceberg.spark.SparkCatalog") \
-#     .config(f"spark.sql.catalog.{S3T_CAT}.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog") \
-#     .config(f"spark.sql.catalog.{S3T_CAT}.glue.id", f"{ACCOUNT_ID}:s3tablescatalog/{TABLE_BUCKET_NAME}") \
-#     .config(f"spark.sql.catalog.{S3T_CAT}.warehouse", f"s3://{BUCKET}/gold-warehouse/") \
-#     .getOrCreate()
-
-spark = glueContext.spark_session  # Replace this with SparkSession.builder above
+spark = SparkSession.builder \
+    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
+    .config(f"spark.sql.catalog.{S3T_CAT}", "org.apache.iceberg.spark.SparkCatalog") \
+    .config(f"spark.sql.catalog.{S3T_CAT}.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog") \
+    .config(f"spark.sql.catalog.{S3T_CAT}.glue.id", f"{ACCOUNT_ID}:s3tablescatalog/{TABLE_BUCKET_NAME}") \
+    .config(f"spark.sql.catalog.{S3T_CAT}.warehouse", f"s3://{BUCKET}/gold-warehouse/") \
+    .getOrCreate()
 
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
@@ -65,32 +60,27 @@ logger.info(f"S3 Tables catalog: {S3T_CAT} → {TABLE_BUCKET_NAME}")
 logger.info(f"Reading silver from: {S3T_CAT}.{DB_SILVER}")
 logger.info(f"Writing gold to: {S3T_CAT}.{DB_GOLD}")
 
-# TODO 2: Create the gold namespace in S3 Tables if it doesn't exist.
-# Same boto3 pattern as the silver layer.
-#
-# import boto3
-# glue_client = boto3.client('glue', region_name=AWS_REGION)
-# try:
-#     glue_client.create_database(
-#         CatalogId=f"{ACCOUNT_ID}:s3tablescatalog/{TABLE_BUCKET_NAME}",
-#         DatabaseInput={'Name': DB_GOLD}
-#     )
-# except Exception as e:
-#     logger.info(f"Namespace already exists: {e}")
+# Use the Glue API (boto3): Spark SQL CREATE NAMESPACE does not work with S3 Tables.
+import boto3
+glue_client = boto3.client('glue', region_name=AWS_REGION)
+try:
+    glue_client.create_database(
+        CatalogId=f"{ACCOUNT_ID}:s3tablescatalog/{TABLE_BUCKET_NAME}",
+        DatabaseInput={'Name': DB_GOLD}
+    )
+except Exception as e:
+    logger.info(f"Namespace already exists: {e}")
 
 
 def create_gold_table(name, query):
     """Query silver, write results to S3 Tables gold namespace."""
     fqn = f"{S3T_CAT}.{DB_GOLD}.{name}"
 
-    # TODO 3: Execute the query, drop existing table with PURGE, write with writeTo.
-    # Same pattern as silver's create_silver_table.
-    #
-    # df = spark.sql(query)
-    # logger.info(f"{name}: {df.count()} rows to write")
-    # spark.sql(f"DROP TABLE IF EXISTS {fqn} PURGE")
-    # df.writeTo(fqn).using("iceberg").tableProperty("format-version", "2").create()
-    pass
+    # S3 Tables requires PURGE when dropping managed Iceberg tables.
+    df = spark.sql(query)
+    logger.info(f"{name}: {df.count()} rows to write")
+    spark.sql(f"DROP TABLE IF EXISTS {fqn} PURGE")
+    df.writeTo(fqn).using("iceberg").tableProperty("format-version", "2").create()
 
 
 # ── 1. customer_analytics ────────────────────────────────────────────────────
