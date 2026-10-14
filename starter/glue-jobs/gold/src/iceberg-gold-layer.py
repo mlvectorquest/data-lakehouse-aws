@@ -105,6 +105,7 @@ create_gold_table("customer_analytics", f"""
         AVG(customer_lifetime_value) AS avg_customer_lifetime_value,
         current_timestamp() AS gold_processed_at
     FROM {S3T_CAT}.{DB_SILVER}.order_details
+    WHERE order_date IS NOT NULL
     GROUP BY date_trunc('month', order_date)
 """)
 
