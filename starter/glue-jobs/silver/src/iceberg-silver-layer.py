@@ -132,6 +132,7 @@ create_silver_table("enriched_events", f"""
     SELECT
         e.event_id,
         e.session_id,
+        e.user_id,
         e.page_url,
         e.source,
         e.event_type,
